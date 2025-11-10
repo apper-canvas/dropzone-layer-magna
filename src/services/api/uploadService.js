@@ -340,7 +340,70 @@ class UploadService {
         default:
           return false;
       }
-    });
+});
+  }
+
+  // Format conversion utilities for ApperFileFieldComponent integration
+  
+  // Convert API format (uppercase properties) to UI format (lowercase properties)
+  convertApiToUiFormat(apiFiles) {
+    if (!Array.isArray(apiFiles)) return [];
+    
+    return apiFiles.map(file => ({
+      id: file.Id?.toString() || file.id?.toString(),
+      name: file.Name || file.name,
+      size: file.Size || file.size,
+      type: file.Type || file.type,
+      uploadedAt: file.UploadedAt || file.uploadedAt,
+      url: file.Url || file.url,
+      status: file.Status || file.status || 'success'
+    }));
+  }
+
+  // Convert UI format (lowercase properties) to API format (uppercase properties)
+  convertUiToApiFormat(uiFiles) {
+    if (!Array.isArray(uiFiles)) return [];
+    
+    return uiFiles.map(file => ({
+      Id: parseInt(file.id) || file.Id,
+      Name: file.name || file.Name,
+      Size: file.size || file.Size,
+      Type: file.type || file.Type,
+      UploadedAt: file.uploadedAt || file.UploadedAt,
+      Url: file.url || file.Url,
+      Status: file.status || file.Status || 'success'
+    }));
+  }
+
+  // Enhanced file validation with format support
+  validateFileWithFormat(file, format = 'ui') {
+    // Normalize file object based on format
+    const normalizedFile = format === 'api' ? {
+      size: file.Size || file.size,
+      type: file.Type || file.type,
+      name: file.Name || file.name
+    } : {
+      size: file.size || file.Size,
+      type: file.type || file.Type,
+      name: file.name || file.Name
+    };
+
+    return this.validateFile(normalizedFile);
+  }
+
+  // Utility to check if format conversion is needed
+  needsFormatConversion(files, targetFormat = 'ui') {
+    if (!Array.isArray(files) || files.length === 0) return false;
+    
+    const firstFile = files[0];
+    
+    if (targetFormat === 'ui') {
+      // Check if it's in API format (has uppercase properties)
+      return firstFile.hasOwnProperty('Id') || firstFile.hasOwnProperty('Name') || firstFile.hasOwnProperty('Size');
+    } else {
+      // Check if it's in UI format (has lowercase properties)
+      return firstFile.hasOwnProperty('id') || firstFile.hasOwnProperty('name') || firstFile.hasOwnProperty('size');
+    }
   }
 }
 
