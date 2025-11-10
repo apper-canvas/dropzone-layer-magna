@@ -1,23 +1,78 @@
-import uploadConfigData from "@/services/mockData/uploadConfig.json";
+import { getApperClient } from "@/services/apperClient";
+import { toast } from "react-toastify";
 
 class UploadService {
   constructor() {
-    this.config = { ...uploadConfigData };
+    this.config = null;
+    this.loadConfig();
   }
 
-  // Simulate delay for realistic experience
-  delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  // Get upload configuration from database
+  async loadConfig() {
+    try {
+      const apperClient = getApperClient();
+      if (!apperClient) return null;
+
+      const response = await apperClient.fetchRecords('upload_config_c', {
+        fields: [
+          {"field": {"Name": "max_file_size_c"}},
+          {"field": {"Name": "allowed_types_c"}},
+          {"field": {"Name": "max_files_c"}},
+          {"field": {"Name": "compression_enabled_c"}}
+        ],
+        pagingInfo: { limit: 1, offset: 0 }
+      });
+
+      if (response.success && response.data && response.data.length > 0) {
+        const configData = response.data[0];
+        this.config = {
+          maxFileSize: configData.max_file_size_c || 10485760,
+          allowedTypes: configData.allowed_types_c ? configData.allowed_types_c.split(',') : [
+            "image/jpeg", "image/png", "image/gif", "application/pdf",
+            "text/plain", "text/csv", "application/zip"
+          ],
+          maxFiles: configData.max_files_c || 10,
+          compressionEnabled: configData.compression_enabled_c || false
+        };
+      } else {
+        // Default configuration
+        this.config = {
+          maxFileSize: 10485760,
+          allowedTypes: [
+            "image/jpeg", "image/png", "image/gif", "application/pdf",
+            "text/plain", "text/csv", "application/zip"
+          ],
+          maxFiles: 10,
+          compressionEnabled: false
+        };
+      }
+    } catch (error) {
+      console.error("Error loading upload config:", error);
+      // Use default configuration
+      this.config = {
+        maxFileSize: 10485760,
+        allowedTypes: [
+          "image/jpeg", "image/png", "image/gif", "application/pdf",
+          "text/plain", "text/csv", "application/zip"
+        ],
+        maxFiles: 10,
+        compressionEnabled: false
+      };
+    }
   }
 
   // Get upload configuration
   async getUploadConfig() {
-    await this.delay(200);
+    if (!this.config) {
+      await this.loadConfig();
+    }
     return { ...this.config };
   }
 
   // Validate file before upload
   validateFile(file) {
+    if (!this.config) return { isValid: false, errors: ["Configuration not loaded"] };
+
     const errors = [];
 
     // Check file size
@@ -77,10 +132,8 @@ class UploadService {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   }
 
-  // Simulate file upload with progress
+  // Upload file to database
   async uploadFile(file, onProgress) {
-    await this.delay(100);
-
     const validation = this.validateFile(file);
     if (!validation.isValid) {
       throw new Error(validation.errors[0]);
@@ -94,26 +147,55 @@ class UploadService {
       onProgress?.(Math.floor(progress));
     }, 300);
 
-    // Random upload duration between 2-5 seconds
-    const uploadDuration = 2000 + Math.random() * 3000;
-    await this.delay(uploadDuration);
+    try {
+      const apperClient = getApperClient();
+      if (!apperClient) {
+        throw new Error("Database client not available");
+      }
 
-    clearInterval(progressInterval);
-    onProgress?.(100);
+      // Simulate upload duration
+      const uploadDuration = 1000 + Math.random() * 2000;
+      await new Promise(resolve => setTimeout(resolve, uploadDuration));
 
-    // Small chance of failure for testing
-    if (Math.random() < 0.1) {
-      throw new Error("Upload failed due to network error");
+      // Create file record in database
+      const fileRecord = {
+        name_c: file.name,
+        size_c: file.size,
+        type_c: file.type,
+        uploaded_at_c: new Date().toISOString(),
+        url_c: URL.createObjectURL(file) // In production, this would be actual file storage URL
+      };
+
+      const response = await apperClient.createRecord('uploaded_file_c', {
+        records: [fileRecord]
+      });
+
+      clearInterval(progressInterval);
+      onProgress?.(100);
+
+      if (!response.success) {
+        throw new Error(response.message || "Upload failed");
+      }
+
+      if (response.results && response.results[0]?.success) {
+        const savedRecord = response.results[0].data;
+        return {
+          id: savedRecord.Id.toString(),
+          name: savedRecord.name_c,
+          size: savedRecord.size_c,
+          type: savedRecord.type_c,
+          uploadedAt: new Date(savedRecord.uploaded_at_c).getTime(),
+          url: savedRecord.url_c
+        };
+      } else {
+        throw new Error("Failed to save file record");
+      }
+
+    } catch (error) {
+      clearInterval(progressInterval);
+      console.error("Upload failed:", error);
+      throw error;
     }
-
-    return {
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      uploadedAt: Date.now(),
-      url: URL.createObjectURL(file) // In real app, this would be server URL
-    };
   }
 
   // Upload multiple files
@@ -139,8 +221,69 @@ class UploadService {
     return results;
   }
 
+  // Get uploaded files from database
+  async getUploadedFiles(limit = 50, offset = 0) {
+    try {
+      const apperClient = getApperClient();
+      if (!apperClient) return [];
+
+      const response = await apperClient.fetchRecords('uploaded_file_c', {
+        fields: [
+          {"field": {"Name": "Id"}},
+          {"field": {"Name": "name_c"}},
+          {"field": {"Name": "size_c"}},
+          {"field": {"Name": "type_c"}},
+          {"field": {"Name": "uploaded_at_c"}},
+          {"field": {"Name": "url_c"}}
+        ],
+        orderBy: [{"fieldName": "uploaded_at_c", "sorttype": "DESC"}],
+        pagingInfo: { limit, offset }
+      });
+
+      if (response.success && response.data) {
+        return response.data.map(record => ({
+          id: record.Id.toString(),
+          name: record.name_c,
+          size: record.size_c,
+          type: record.type_c,
+          uploadedAt: new Date(record.uploaded_at_c).getTime(),
+          url: record.url_c,
+          status: "success"
+        }));
+      }
+
+      return [];
+    } catch (error) {
+      console.error("Error fetching uploaded files:", error);
+      return [];
+    }
+  }
+
+  // Delete uploaded file
+  async deleteUploadedFile(fileId) {
+    try {
+      const apperClient = getApperClient();
+      if (!apperClient) throw new Error("Database client not available");
+
+      const response = await apperClient.deleteRecord('uploaded_file_c', {
+        RecordIds: [parseInt(fileId)]
+      });
+
+      if (!response.success) {
+        throw new Error(response.message || "Delete failed");
+      }
+
+      return response.success;
+    } catch (error) {
+      console.error("Error deleting file:", error);
+      throw error;
+    }
+  }
+
   // Get supported file extensions for display
   getSupportedExtensions() {
+    if (!this.config) return [];
+
     const extensionMap = {
       "image/jpeg": ["jpg", "jpeg"],
       "image/png": ["png"],
